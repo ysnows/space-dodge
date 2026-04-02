@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Space Dodge — Three.js</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
+  canvas { display: block; }
+  #ui {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none; z-index: 10;
+  }
+  #score {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    color: #00ffff; font-size: 24px; font-weight: bold;
+    text-shadow: 0 0 10px #00ffff;
+  }
+  #lives {
+    position: fixed; top: 20px; right: 20px;
+    color: #ff4466; font-size: 20px;
+    text-shadow: 0 0 8px #ff4466;
+  }
+  #overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.85); z-index: 20; color: white;
+    transition: opacity 0.3s;
+  }
+  #overlay h1 { font-size: 48px; color: #00ffff; text-shadow: 0 0 20px #00ffff; margin-bottom: 10px; }
+  #overlay p { font-size: 18px; color: #aaa; margin-bottom: 8px; }
+  #overlay .hint { font-size: 14px; color: #666; margin-top: 20px; }
+  #startBtn {
+    margin-top: 30px; padding: 14px 40px; font-size: 20px;
+    background: #00ffff; color: #000; border: none; border-radius: 8px;
+    cursor: pointer; pointer-events: all; font-weight: bold;
+    transition: transform 0.1s, box-shadow 0.1s;
+    box-shadow: 0 0 20px #00ffff;
+  }
+  #startBtn:hover { transform: scale(1.05); box-shadow: 0 0 30px #00ffff; }
+  #finalScore { font-size: 28px; color: #ffcc00; margin: 10px 0; text-shadow: 0 0 10px #ffcc00; }
+</style>
+</head>
+<body>
+<div id="score">SCORE: 0</div>
+<div id="lives">❤️ ❤️ ❤️</div>
+<div id="overlay">
+  <h1>🚀 SPACE DODGE</h1>
+  <p>Dodge the asteroids. Collect stars for points.</p>
+  <p>Use <strong>← →</strong> arrow keys or <strong>A / D</strong> to move.</p>
+  <div id="finalScore" style="display:none"></div>
+  <button id="startBtn">START GAME</button>
+  <div class="hint">Built with Three.js ✨</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ─── Scene Setup ───────────────────────────────────────────────────────────
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 200);
+camera.position.set(0, 0, 15);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+
+// Fog
+scene.fog = new THREE.FogExp2(0x000011, 0.02);
+
+// Lights
+scene.add(new THREE.AmbientLight(0x223355, 1.5));
+const dirLight = new THREE.DirectionalLight(0x00ffff, 1.5);
+dirLight.position.set(5, 10, 5);
+scene.add(dirLight);
+const pointLight = new THREE.PointLight(0xff4466, 2, 30);
+pointLight.position.set(-5, 3, 5);
+scene.add(pointLight);
+
+// ─── Starfield ─────────────────────────────────────────────────────────────
+const starGeo = new THREE.BufferGeometry();
+const starVerts = [];
+for (let i = 0; i < 3000; i++) {
+  starVerts.push((Math.random() - 0.5) * 200, (Math.random() - 0.5) * 200, (Math.random() - 0.5) * 200);
+}
+starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starVerts, 3));
+scene.add(new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.2 })));
+
+// ─── Player Ship ───────────────────────────────────────────────────────────
+const shipGroup = new THREE.Group();
+
+// Body
+const bodyGeo = new THREE.ConeGeometry(0.4, 1.4, 8);
+const bodyMat = new THREE.MeshPhongMaterial({ color: 0x4488ff, emissive: 0x112244, shininess: 100 });
+const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
+bodyMesh.rotation.z = Math.PI; // point up
+shipGroup.add(bodyMesh);
+
+// Wings
+const wingGeo = new THREE.BoxGeometry(1.4, 0.08, 0.5);
+const wingMat = new THREE.MeshPhongMaterial({ color: 0x2266cc, emissive: 0x112244 });
+shipGroup.add(new THREE.Mesh(wingGeo, wingMat));
+
+// Engine glow
+const glowGeo = new THREE.SphereGeometry(0.2, 8, 8);
+const glowMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
+const glow = new THREE.Mesh(glowGeo, glowMat);
+glow.position.y = 0.8;
+shipGroup.add(glow);
+
+shipGroup.position.set(0, -5, 0);
+scene.add(shipGroup);
+
+// ─── Game State ────────────────────────────────────────────────────────────
+let score = 0, lives = 3, gameRunning = false;
+let playerX = 0, targetX = 0;
+let speed = 0.06, spawnRate = 60, frameCount = 0;
+const obstacles = [], stars = [];
+const BOUNDS = 5;
+
+const keys = {};
+document.addEventListener('keydown', e => keys[e.key] = true);
+document.addEventListener('keyup', e => keys[e.key] = false);
+
+// Touch support
+let touchStartX = null;
+document.addEventListener('touchstart', e => { touchStartX = e.touches[0].clientX; });
+document.addEventListener('touchmove', e => {
+  if (touchStartX === null) return;
+  const dx = e.touches[0].clientX - touchStartX;
+  targetX = Math.max(-BOUNDS, Math.min(BOUNDS, targetX + dx * 0.02));
+  touchStartX = e.touches[0].clientX;
+});
+
+// ─── Asteroid Factory ──────────────────────────────────────────────────────
+function makeAsteroid() {
+  const r = 0.3 + Math.random() * 0.6;
+  const geo = new THREE.DodecahedronGeometry(r, 0);
+  // Distort for rocky look
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    pos.setXYZ(i, pos.getX(i) + (Math.random()-0.5)*0.2,
+                   pos.getY(i) + (Math.random()-0.5)*0.2,
+                   pos.getZ(i) + (Math.random()-0.5)*0.2);
+  }
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshPhongMaterial({
+    color: new THREE.Color().setHSL(0.05 + Math.random()*0.05, 0.5, 0.4),
+    shininess: 10
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set((Math.random()-0.5)*BOUNDS*2, 12, (Math.random()-0.5)*2);
+  mesh.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
+  mesh.userData = { r, rotSpeed: (Math.random()-0.5)*0.05, fallSpeed: speed + Math.random()*0.03 };
+  scene.add(mesh);
+  obstacles.push(mesh);
+}
+
+// ─── Star Collectible Factory ──────────────────────────────────────────────
+function makeStar() {
+  const geo = new THREE.OctahedronGeometry(0.25, 0);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffdd00 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set((Math.random()-0.5)*BOUNDS*2, 12, 0);
+  mesh.userData = { fallSpeed: speed * 0.8 };
+  scene.add(mesh);
+  stars.push(mesh);
+}
+
+// ─── Explosion ─────────────────────────────────────────────────────────────
+function explode(pos, color) {
+  const count = 20;
+  const geo = new THREE.BufferGeometry();
+  const verts = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    verts[i*3]   = pos.x + (Math.random()-0.5)*0.5;
+    verts[i*3+1] = pos.y + (Math.random()-0.5)*0.5;
+    verts[i*3+2] = pos.z;
+  }
+  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+  const mat = new THREE.PointsMaterial({ color, size: 0.3, transparent: true });
+  const pts = new THREE.Points(geo, mat);
+  scene.add(pts);
+  let life = 1.0;
+  const fade = setInterval(() => {
+    life -= 0.05;
+    mat.opacity = life;
+    if (life <= 0) { scene.remove(pts); clearInterval(fade); }
+  }, 30);
+}
+
+// ─── UI Helpers ────────────────────────────────────────────────────────────
+const scoreEl = document.getElementById('score');
+const livesEl = document.getElementById('lives');
+const overlay = document.getElementById('overlay');
+const startBtn = document.getElementById('startBtn');
+const finalScoreEl = document.getElementById('finalScore');
+
+function updateUI() {
+  scoreEl.textContent = `SCORE: ${score}`;
+  livesEl.textContent = '❤️'.repeat(lives) || '💀';
+}
+
+function loseLife() {
+  lives--;
+  explode(shipGroup.position.clone(), 0xff4466);
+  // Flash ship
+  shipGroup.visible = false;
+  setTimeout(() => shipGroup.visible = true, 400);
+  updateUI();
+  if (lives <= 0) endGame();
+}
+
+function endGame() {
+  gameRunning = false;
+  finalScoreEl.style.display = 'block';
+  finalScoreEl.textContent = `Final Score: ${score}`;
+  overlay.style.display = 'flex';
+  startBtn.textContent = 'PLAY AGAIN';
+}
+
+function startGame() {
+  // Reset
+  score = 0; lives = 3; gameRunning = true; frameCount = 0;
+  speed = 0.06; spawnRate = 60;
+  playerX = 0; targetX = 0;
+  shipGroup.position.set(0, -5, 0);
+  obstacles.forEach(o => scene.remove(o)); obstacles.length = 0;
+  stars.forEach(s => scene.remove(s)); stars.length = 0;
+  overlay.style.display = 'none';
+  finalScoreEl.style.display = 'none';
+  updateUI();
+}
+
+startBtn.addEventListener('click', startGame);
+
+// ─── Animation Loop ────────────────────────────────────────────────────────
+function animate() {
+  requestAnimationFrame(animate);
+
+  if (gameRunning) {
+    frameCount++;
+
+    // Input
+    if (keys['ArrowLeft'] || keys['a'] || keys['A']) targetX -= 0.12;
+    if (keys['ArrowRight'] || keys['d'] || keys['D']) targetX += 0.12;
+    targetX = Math.max(-BOUNDS, Math.min(BOUNDS, targetX));
+    playerX += (targetX - playerX) * 0.15;
+    shipGroup.position.x = playerX;
+    shipGroup.rotation.z = -(targetX - playerX) * 0.8;
+
+    // Glow pulse
+    const t = Date.now() * 0.005;
+    glow.material.color.setHSL(0.08, 1, 0.5 + 0.3 * Math.sin(t));
+    glow.scale.setScalar(0.8 + 0.3 * Math.sin(t));
+
+    // Increase difficulty
+    if (frameCount % 300 === 0) { speed += 0.005; spawnRate = Math.max(20, spawnRate - 3); }
+
+    // Spawn
+    if (frameCount % spawnRate === 0) makeAsteroid();
+    if (frameCount % 90 === 0) makeStar();
+
+    // Update obstacles
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+      const o = obstacles[i];
+      o.position.y -= o.userData.fallSpeed;
+      o.rotation.x += o.userData.rotSpeed;
+      o.rotation.y += o.userData.rotSpeed * 0.7;
+
+      // Hit check
+      const dx = o.position.x - shipGroup.position.x;
+      const dy = o.position.y - shipGroup.position.y;
+      if (Math.sqrt(dx*dx + dy*dy) < o.userData.r + 0.5) {
+        explode(o.position.clone(), 0xff8800);
+        scene.remove(o); obstacles.splice(i, 1);
+        loseLife(); continue;
+      }
+      if (o.position.y < -10) { scene.remove(o); obstacles.splice(i, 1); }
+    }
+
+    // Update stars
+    for (let i = stars.length - 1; i >= 0; i--) {
+      const s = stars[i];
+      s.position.y -= s.userData.fallSpeed;
+      s.rotation.y += 0.05;
+      const dx = s.position.x - shipGroup.position.x;
+      const dy = s.position.y - shipGroup.position.y;
+      if (Math.sqrt(dx*dx + dy*dy) < 0.7) {
+        explode(s.position.clone(), 0xffdd00);
+        scene.remove(s); stars.splice(i, 1);
+        score += 10; updateUI(); continue;
+      }
+      if (s.position.y < -10) { scene.remove(s); stars.splice(i, 1); }
+    }
+
+    // Score over time
+    if (frameCount % 30 === 0) { score++; updateUI(); }
+
+    // Camera subtle drift
+    camera.position.x += (playerX * 0.05 - camera.position.x) * 0.02;
+  }
+
+  renderer.render(scene, camera);
+}
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+animate();
+</script>
+</body>
+</html>
