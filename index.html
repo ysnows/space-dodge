@@ -8,307 +8,547 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #000; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
   canvas { display: block; }
-  #ui {
-    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-    pointer-events: none; z-index: 10;
-  }
   #score {
     position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-    color: #00ffff; font-size: 24px; font-weight: bold;
-    text-shadow: 0 0 10px #00ffff;
+    color: #00ffff; font-size: 26px; font-weight: bold;
+    text-shadow: 0 0 12px #00ffff; letter-spacing: 2px;
   }
   #lives {
     position: fixed; top: 20px; right: 20px;
-    color: #ff4466; font-size: 20px;
+    color: #ff4466; font-size: 22px;
     text-shadow: 0 0 8px #ff4466;
+  }
+  #level {
+    position: fixed; top: 20px; left: 20px;
+    color: #aaffaa; font-size: 18px;
+    text-shadow: 0 0 8px #aaffaa;
+  }
+  #combo {
+    position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
+    color: #ffdd00; font-size: 20px; font-weight: bold;
+    text-shadow: 0 0 10px #ffdd00;
+    opacity: 0; transition: opacity 0.3s;
   }
   #overlay {
     position: fixed; top: 0; left: 0; width: 100%; height: 100%;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    background: rgba(0,0,0,0.85); z-index: 20; color: white;
-    transition: opacity 0.3s;
+    background: rgba(0,0,0,0.88); z-index: 20; color: white;
   }
-  #overlay h1 { font-size: 48px; color: #00ffff; text-shadow: 0 0 20px #00ffff; margin-bottom: 10px; }
-  #overlay p { font-size: 18px; color: #aaa; margin-bottom: 8px; }
-  #overlay .hint { font-size: 14px; color: #666; margin-top: 20px; }
+  #overlay h1 { font-size: 52px; color: #00ffff; text-shadow: 0 0 24px #00ffff; margin-bottom: 8px; }
+  #overlay .sub { font-size: 16px; color: #888; margin-bottom: 6px; }
+  #overlay .controls { font-size: 15px; color: #aaa; margin-bottom: 4px; }
+  #finalScore { font-size: 30px; color: #ffcc00; margin: 12px 0; text-shadow: 0 0 12px #ffcc00; display:none; }
+  #highScore { font-size: 18px; color: #ff88cc; margin-bottom: 6px; display:none; }
   #startBtn {
-    margin-top: 30px; padding: 14px 40px; font-size: 20px;
-    background: #00ffff; color: #000; border: none; border-radius: 8px;
-    cursor: pointer; pointer-events: all; font-weight: bold;
+    margin-top: 24px; padding: 16px 48px; font-size: 22px;
+    background: linear-gradient(135deg, #00ffff, #0088ff);
+    color: #000; border: none; border-radius: 10px;
+    cursor: pointer; font-weight: bold;
+    box-shadow: 0 0 24px #00ffff88;
     transition: transform 0.1s, box-shadow 0.1s;
-    box-shadow: 0 0 20px #00ffff;
   }
-  #startBtn:hover { transform: scale(1.05); box-shadow: 0 0 30px #00ffff; }
-  #finalScore { font-size: 28px; color: #ffcc00; margin: 10px 0; text-shadow: 0 0 10px #ffcc00; }
+  #startBtn:hover { transform: scale(1.06); box-shadow: 0 0 36px #00ffff; }
+  #soundBtn {
+    position: fixed; bottom: 20px; right: 20px;
+    background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+    color: white; padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 18px;
+    z-index: 30;
+  }
+  .hint { font-size: 13px; color: #555; margin-top: 16px; }
 </style>
 </head>
 <body>
 <div id="score">SCORE: 0</div>
 <div id="lives">❤️ ❤️ ❤️</div>
+<div id="level">LV 1</div>
+<div id="combo"></div>
+
 <div id="overlay">
   <h1>🚀 SPACE DODGE</h1>
-  <p>Dodge the asteroids. Collect stars for points.</p>
-  <p>Use <strong>← →</strong> arrow keys or <strong>A / D</strong> to move.</p>
-  <div id="finalScore" style="display:none"></div>
+  <div class="sub">Dodge asteroids · Collect stars · Survive!</div>
+  <div class="controls">← → or A / D to move &nbsp;|&nbsp; SHIFT for boost</div>
+  <div id="finalScore"></div>
+  <div id="highScore"></div>
   <button id="startBtn">START GAME</button>
-  <div class="hint">Built with Three.js ✨</div>
+  <div class="hint">Built with Three.js + Web Audio API ✨</div>
 </div>
+
+<button id="soundBtn">🔊</button>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
-// ─── Scene Setup ───────────────────────────────────────────────────────────
+// ─── Audio Engine ──────────────────────────────────────────────────────────
+let audioCtx = null;
+let soundEnabled = true;
+
+document.getElementById('soundBtn').addEventListener('click', () => {
+  soundEnabled = !soundEnabled;
+  document.getElementById('soundBtn').textContent = soundEnabled ? '🔊' : '🔇';
+});
+
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function playTone(freq, type, duration, volume = 0.3, detune = 0) {
+  if (!soundEnabled) return;
+  try {
+    const ctx = getAudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.type = type; osc.frequency.value = freq; osc.detune.value = detune;
+    gain.gain.setValueAtTime(volume, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+    osc.start(); osc.stop(ctx.currentTime + duration);
+  } catch(e) {}
+}
+
+function playNoise(duration, volume = 0.2) {
+  if (!soundEnabled) return;
+  try {
+    const ctx = getAudioCtx();
+    const bufSize = ctx.sampleRate * duration;
+    const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource();
+    const gain = ctx.createGain();
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass'; filter.frequency.value = 300 + Math.random() * 200;
+    src.buffer = buf;
+    src.connect(filter); filter.connect(gain); gain.connect(ctx.destination);
+    gain.gain.setValueAtTime(volume, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+    src.start(); src.stop(ctx.currentTime + duration);
+  } catch(e) {}
+}
+
+const SFX = {
+  collectStar: () => {
+    playTone(880, 'sine', 0.1, 0.25);
+    setTimeout(() => playTone(1100, 'sine', 0.1, 0.2), 60);
+    setTimeout(() => playTone(1320, 'sine', 0.15, 0.15), 120);
+  },
+  hit: () => {
+    playNoise(0.25, 0.35);
+    playTone(120, 'sawtooth', 0.3, 0.2);
+  },
+  thrust: () => {
+    playNoise(0.05, 0.06);
+  },
+  levelUp: () => {
+    [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => playTone(f, 'square', 0.15, 0.2), i * 80));
+  },
+  gameOver: () => {
+    [400, 320, 240, 160].forEach((f, i) => setTimeout(() => playTone(f, 'sawtooth', 0.2, 0.25), i * 100));
+  },
+  boost: () => {
+    playTone(200, 'sawtooth', 0.15, 0.15);
+    playTone(250, 'square', 0.1, 0.1);
+  },
+  combo: (n) => {
+    playTone(440 + n * 80, 'sine', 0.12, 0.2);
+  }
+};
+
+// ─── Scene ─────────────────────────────────────────────────────────────────
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 200);
-camera.position.set(0, 0, 15);
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 200);
+camera.position.set(0, 2, 18);
+camera.lookAt(0, 0, 0);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(devicePixelRatio);
+renderer.shadowMap.enabled = true;
 document.body.appendChild(renderer.domElement);
 
-// Fog
-scene.fog = new THREE.FogExp2(0x000011, 0.02);
+scene.fog = new THREE.FogExp2(0x000011, 0.018);
 
 // Lights
-scene.add(new THREE.AmbientLight(0x223355, 1.5));
-const dirLight = new THREE.DirectionalLight(0x00ffff, 1.5);
-dirLight.position.set(5, 10, 5);
-scene.add(dirLight);
-const pointLight = new THREE.PointLight(0xff4466, 2, 30);
-pointLight.position.set(-5, 3, 5);
-scene.add(pointLight);
+scene.add(new THREE.AmbientLight(0x223366, 1.8));
+const sun = new THREE.DirectionalLight(0x88aaff, 1.5);
+sun.position.set(5, 10, 5); scene.add(sun);
+const engineLight = new THREE.PointLight(0xff6600, 3, 8);
+scene.add(engineLight);
 
-// ─── Starfield ─────────────────────────────────────────────────────────────
+// ─── Starfield (animated) ──────────────────────────────────────────────────
 const starGeo = new THREE.BufferGeometry();
-const starVerts = [];
-for (let i = 0; i < 3000; i++) {
-  starVerts.push((Math.random() - 0.5) * 200, (Math.random() - 0.5) * 200, (Math.random() - 0.5) * 200);
+const starVerts = [], starSpeeds = [];
+for (let i = 0; i < 4000; i++) {
+  starVerts.push((Math.random()-0.5)*200, (Math.random()-0.5)*200, -20 - Math.random()*180);
+  starSpeeds.push(0.1 + Math.random() * 0.3);
 }
 starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starVerts, 3));
-scene.add(new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.2 })));
+const starField = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.15, transparent: true, opacity: 0.8 }));
+scene.add(starField);
 
-// ─── Player Ship ───────────────────────────────────────────────────────────
+// ─── Ship ──────────────────────────────────────────────────────────────────
 const shipGroup = new THREE.Group();
 
-// Body
-const bodyGeo = new THREE.ConeGeometry(0.4, 1.4, 8);
-const bodyMat = new THREE.MeshPhongMaterial({ color: 0x4488ff, emissive: 0x112244, shininess: 100 });
-const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
-bodyMesh.rotation.z = Math.PI; // point up
-shipGroup.add(bodyMesh);
+const bodyGeo = new THREE.ConeGeometry(0.45, 1.6, 8);
+const bodyMat = new THREE.MeshPhongMaterial({ color: 0x4499ff, emissive: 0x112255, shininess: 120 });
+const body = new THREE.Mesh(bodyGeo, bodyMat);
+body.rotation.z = Math.PI;
+shipGroup.add(body);
 
 // Wings
-const wingGeo = new THREE.BoxGeometry(1.4, 0.08, 0.5);
-const wingMat = new THREE.MeshPhongMaterial({ color: 0x2266cc, emissive: 0x112244 });
-shipGroup.add(new THREE.Mesh(wingGeo, wingMat));
+const wingShape = new THREE.Shape();
+wingShape.moveTo(0, 0); wingShape.lineTo(1.2, -0.6); wingShape.lineTo(0.8, 0.3); wingShape.lineTo(0, 0);
+const wingGeo = new THREE.ShapeGeometry(wingShape);
+const wingMat = new THREE.MeshPhongMaterial({ color: 0x2266cc, side: THREE.DoubleSide });
+const wingL = new THREE.Mesh(wingGeo, wingMat); wingL.rotation.x = Math.PI/2;
+const wingR = wingL.clone(); wingR.scale.x = -1;
+shipGroup.add(wingL, wingR);
 
-// Engine glow
-const glowGeo = new THREE.SphereGeometry(0.2, 8, 8);
-const glowMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
-const glow = new THREE.Mesh(glowGeo, glowMat);
-glow.position.y = 0.8;
-shipGroup.add(glow);
+// Engine flames (3 exhausts)
+const flameGeo = new THREE.ConeGeometry(0.12, 0.5, 6);
+const flameMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
+[-0.25, 0, 0.25].forEach(x => {
+  const flame = new THREE.Mesh(flameGeo, flameMat.clone());
+  flame.position.set(x, 0.9, 0);
+  flame.userData.isFlame = true;
+  shipGroup.add(flame);
+});
 
-shipGroup.position.set(0, -5, 0);
+// Shield ring (hidden by default)
+const shieldGeo = new THREE.TorusGeometry(1.1, 0.05, 8, 32);
+const shieldMat = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0 });
+const shield = new THREE.Mesh(shieldGeo, shieldMat);
+shipGroup.add(shield);
+
+shipGroup.position.set(0, -4.5, 0);
 scene.add(shipGroup);
 
 // ─── Game State ────────────────────────────────────────────────────────────
-let score = 0, lives = 3, gameRunning = false;
-let playerX = 0, targetX = 0;
-let speed = 0.06, spawnRate = 60, frameCount = 0;
-const obstacles = [], stars = [];
-const BOUNDS = 5;
+let score = 0, lives = 3, level = 1, combo = 0, gameRunning = false;
+let playerX = 0, targetX = 0, playerVX = 0;
+let speed = 0.06, spawnRate = 55, frameCount = 0;
+let highScore = parseInt(localStorage.getItem('spaceDodgeHS') || '0');
+let boostActive = false, boostCooldown = 0;
+let shieldTime = 0, invincible = 0;
+let thrustTimer = 0;
+const obstacles = [], stars = [], powerups = [], particles = [];
+const BOUNDS = 5.5;
 
 const keys = {};
-document.addEventListener('keydown', e => keys[e.key] = true);
+document.addEventListener('keydown', e => { keys[e.key] = true; if(e.key === ' ') e.preventDefault(); });
 document.addEventListener('keyup', e => keys[e.key] = false);
 
-// Touch support
+// Touch
 let touchStartX = null;
-document.addEventListener('touchstart', e => { touchStartX = e.touches[0].clientX; });
+document.addEventListener('touchstart', e => touchStartX = e.touches[0].clientX);
 document.addEventListener('touchmove', e => {
-  if (touchStartX === null) return;
-  const dx = e.touches[0].clientX - touchStartX;
-  targetX = Math.max(-BOUNDS, Math.min(BOUNDS, targetX + dx * 0.02));
+  if (!touchStartX) return;
+  targetX = Math.max(-BOUNDS, Math.min(BOUNDS, targetX + (e.touches[0].clientX - touchStartX) * 0.025));
   touchStartX = e.touches[0].clientX;
-});
+}, { passive: true });
 
-// ─── Asteroid Factory ──────────────────────────────────────────────────────
+// ─── Factories ─────────────────────────────────────────────────────────────
 function makeAsteroid() {
-  const r = 0.3 + Math.random() * 0.6;
+  const r = 0.25 + Math.random() * 0.7;
   const geo = new THREE.DodecahedronGeometry(r, 0);
-  // Distort for rocky look
   const pos = geo.attributes.position;
   for (let i = 0; i < pos.count; i++) {
-    pos.setXYZ(i, pos.getX(i) + (Math.random()-0.5)*0.2,
-                   pos.getY(i) + (Math.random()-0.5)*0.2,
-                   pos.getZ(i) + (Math.random()-0.5)*0.2);
+    pos.setXYZ(i, pos.getX(i)+(Math.random()-.5)*.25, pos.getY(i)+(Math.random()-.5)*.25, pos.getZ(i)+(Math.random()-.5)*.25);
   }
   geo.computeVertexNormals();
-  const mat = new THREE.MeshPhongMaterial({
-    color: new THREE.Color().setHSL(0.05 + Math.random()*0.05, 0.5, 0.4),
-    shininess: 10
-  });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.set((Math.random()-0.5)*BOUNDS*2, 12, (Math.random()-0.5)*2);
-  mesh.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
-  mesh.userData = { r, rotSpeed: (Math.random()-0.5)*0.05, fallSpeed: speed + Math.random()*0.03 };
-  scene.add(mesh);
-  obstacles.push(mesh);
+  const hue = Math.random() < 0.2 ? 0.6 : 0.05 + Math.random()*0.05;
+  const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ color: new THREE.Color().setHSL(hue, 0.5, 0.4), shininess: 15 }));
+  // Lane-based spawn for fairness
+  const lane = Math.floor(Math.random() * 5) - 2;
+  mesh.position.set(lane * 2.2 + (Math.random()-.5)*1.5, 13, (Math.random()-.5)*2);
+  mesh.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, 0);
+  mesh.userData = { r, rotX: (Math.random()-.5)*.06, rotY: (Math.random()-.5)*.06, fallSpeed: speed + Math.random()*0.04 };
+  scene.add(mesh); obstacles.push(mesh);
 }
 
-// ─── Star Collectible Factory ──────────────────────────────────────────────
 function makeStar() {
-  const geo = new THREE.OctahedronGeometry(0.25, 0);
-  const mat = new THREE.MeshBasicMaterial({ color: 0xffdd00 });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.set((Math.random()-0.5)*BOUNDS*2, 12, 0);
-  mesh.userData = { fallSpeed: speed * 0.8 };
-  scene.add(mesh);
-  stars.push(mesh);
+  const geo = new THREE.OctahedronGeometry(0.28, 0);
+  const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xffdd00 }));
+  mesh.position.set((Math.random()-.5)*BOUNDS*2, 13, 0);
+  mesh.userData = { fallSpeed: speed * 0.75, isStar: true };
+  scene.add(mesh); stars.push(mesh);
 }
 
-// ─── Explosion ─────────────────────────────────────────────────────────────
-function explode(pos, color) {
-  const count = 20;
-  const geo = new THREE.BufferGeometry();
-  const verts = new Float32Array(count * 3);
+function makePowerup() {
+  // Shield powerup
+  const geo = new THREE.OctahedronGeometry(0.35, 1);
+  const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true }));
+  mesh.position.set((Math.random()-.5)*BOUNDS*1.5, 13, 0);
+  mesh.userData = { fallSpeed: speed * 0.6, type: 'shield' };
+  scene.add(mesh); powerups.push(mesh);
+}
+
+// ─── Particles ─────────────────────────────────────────────────────────────
+function spawnParticles(pos, color, count = 16, spread = 0.8) {
   for (let i = 0; i < count; i++) {
-    verts[i*3]   = pos.x + (Math.random()-0.5)*0.5;
-    verts[i*3+1] = pos.y + (Math.random()-0.5)*0.5;
-    verts[i*3+2] = pos.z;
+    const geo = new THREE.SphereGeometry(0.06 + Math.random()*0.08, 4, 4);
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true });
+    const p = new THREE.Mesh(geo, mat);
+    p.position.copy(pos);
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 0.05 + Math.random() * 0.12;
+    p.userData = {
+      vx: Math.cos(angle) * speed * spread,
+      vy: -0.02 + Math.random() * 0.1,
+      life: 1.0,
+      decay: 0.025 + Math.random() * 0.02
+    };
+    scene.add(p); particles.push(p);
   }
-  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
-  const mat = new THREE.PointsMaterial({ color, size: 0.3, transparent: true });
-  const pts = new THREE.Points(geo, mat);
-  scene.add(pts);
-  let life = 1.0;
-  const fade = setInterval(() => {
-    life -= 0.05;
-    mat.opacity = life;
-    if (life <= 0) { scene.remove(pts); clearInterval(fade); }
-  }, 30);
 }
 
-// ─── UI Helpers ────────────────────────────────────────────────────────────
+// ─── UI ────────────────────────────────────────────────────────────────────
 const scoreEl = document.getElementById('score');
 const livesEl = document.getElementById('lives');
+const levelEl = document.getElementById('level');
+const comboEl = document.getElementById('combo');
 const overlay = document.getElementById('overlay');
 const startBtn = document.getElementById('startBtn');
 const finalScoreEl = document.getElementById('finalScore');
+const highScoreEl = document.getElementById('highScore');
+let comboTimeout;
 
 function updateUI() {
   scoreEl.textContent = `SCORE: ${score}`;
-  livesEl.textContent = '❤️'.repeat(lives) || '💀';
+  livesEl.textContent = (invincible > 0 ? '🛡️' : '❤️').repeat(lives) || '💀';
+  levelEl.textContent = `LV ${level}`;
+}
+
+function showCombo(n) {
+  if (n < 2) return;
+  comboEl.textContent = `${n}x COMBO! +${n*5}`;
+  comboEl.style.opacity = '1';
+  clearTimeout(comboTimeout);
+  comboTimeout = setTimeout(() => comboEl.style.opacity = '0', 1200);
+  SFX.combo(n);
 }
 
 function loseLife() {
-  lives--;
-  explode(shipGroup.position.clone(), 0xff4466);
-  // Flash ship
-  shipGroup.visible = false;
-  setTimeout(() => shipGroup.visible = true, 400);
+  if (invincible > 0) return;
+  lives--; combo = 0; invincible = 120;
+  SFX.hit();
+  spawnParticles(shipGroup.position.clone(), 0xff4466, 20);
+  // Screen shake
+  screenShake = 15;
   updateUI();
   if (lives <= 0) endGame();
 }
 
 function endGame() {
   gameRunning = false;
+  if (score > highScore) { highScore = score; localStorage.setItem('spaceDodgeHS', score); }
   finalScoreEl.style.display = 'block';
   finalScoreEl.textContent = `Final Score: ${score}`;
+  highScoreEl.style.display = 'block';
+  highScoreEl.textContent = `Best: ${highScore}`;
   overlay.style.display = 'flex';
   startBtn.textContent = 'PLAY AGAIN';
+  SFX.gameOver();
 }
 
 function startGame() {
-  // Reset
-  score = 0; lives = 3; gameRunning = true; frameCount = 0;
-  speed = 0.06; spawnRate = 60;
-  playerX = 0; targetX = 0;
-  shipGroup.position.set(0, -5, 0);
-  obstacles.forEach(o => scene.remove(o)); obstacles.length = 0;
-  stars.forEach(s => scene.remove(s)); stars.length = 0;
+  score = 0; lives = 3; level = 1; combo = 0; gameRunning = true; frameCount = 0;
+  speed = 0.06; spawnRate = 55; invincible = 0; boostCooldown = 0; shieldTime = 0;
+  playerX = 0; targetX = 0; playerVX = 0;
+  shipGroup.position.set(0, -4.5, 0);
+  [...obstacles, ...stars, ...powerups, ...particles].forEach(o => scene.remove(o));
+  obstacles.length = 0; stars.length = 0; powerups.length = 0; particles.length = 0;
   overlay.style.display = 'none';
   finalScoreEl.style.display = 'none';
+  highScoreEl.style.display = 'none';
   updateUI();
+  getAudioCtx(); // unlock audio
 }
 
 startBtn.addEventListener('click', startGame);
 
-// ─── Animation Loop ────────────────────────────────────────────────────────
+// ─── Screen shake ──────────────────────────────────────────────────────────
+let screenShake = 0;
+const baseCamPos = new THREE.Vector3(0, 2, 18);
+
+// ─── Main Loop ─────────────────────────────────────────────────────────────
+const clock = new THREE.Clock();
+
 function animate() {
   requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
 
   if (gameRunning) {
     frameCount++;
 
-    // Input
-    if (keys['ArrowLeft'] || keys['a'] || keys['A']) targetX -= 0.12;
-    if (keys['ArrowRight'] || keys['d'] || keys['D']) targetX += 0.12;
-    targetX = Math.max(-BOUNDS, Math.min(BOUNDS, targetX));
-    playerX += (targetX - playerX) * 0.15;
+    // ── Input & movement ──
+    let moveX = 0;
+    if (keys['ArrowLeft'] || keys['a'] || keys['A']) moveX -= 1;
+    if (keys['ArrowRight'] || keys['d'] || keys['D']) moveX += 1;
+
+    // Boost
+    boostActive = (keys['Shift'] || keys[' ']) && boostCooldown <= 0;
+    if (boostActive) {
+      boostCooldown = 180;
+      SFX.boost();
+    }
+    if (boostCooldown > 0) boostCooldown--;
+    const moveSpeed = boostActive ? 0.22 : 0.13;
+    targetX = Math.max(-BOUNDS, Math.min(BOUNDS, targetX + moveX * moveSpeed));
+
+    playerVX += (targetX - playerX) * 0.18;
+    playerVX *= 0.75;
+    playerX += playerVX;
     shipGroup.position.x = playerX;
-    shipGroup.rotation.z = -(targetX - playerX) * 0.8;
+    shipGroup.rotation.z = -playerVX * 1.8;
 
-    // Glow pulse
-    const t = Date.now() * 0.005;
-    glow.material.color.setHSL(0.08, 1, 0.5 + 0.3 * Math.sin(t));
-    glow.scale.setScalar(0.8 + 0.3 * Math.sin(t));
+    // Thrust sound
+    if (moveX !== 0 && frameCount % 4 === 0) SFX.thrust();
 
-    // Increase difficulty
-    if (frameCount % 300 === 0) { speed += 0.005; spawnRate = Math.max(20, spawnRate - 3); }
+    // Invincibility countdown
+    if (invincible > 0) {
+      invincible--;
+      shipGroup.visible = Math.floor(invincible / 6) % 2 === 0;
+    } else { shipGroup.visible = true; }
 
-    // Spawn
+    // ── Flames ──
+    const t = Date.now() * 0.008;
+    shipGroup.children.forEach(c => {
+      if (c.userData.isFlame) {
+        c.material.color.setHSL(0.07 + Math.sin(t)*0.02, 1, 0.5 + Math.sin(t*1.3)*0.2);
+        c.scale.y = 0.7 + Math.sin(t + c.position.x) * 0.4;
+      }
+    });
+    engineLight.position.copy(shipGroup.position).y += 0.5;
+    engineLight.color.setHSL(0.07, 1, 0.5 + Math.sin(t)*0.3);
+
+    // Shield visual
+    if (shieldTime > 0) {
+      shieldTime--;
+      shieldMat.opacity = 0.4 + Math.sin(t*4)*0.2;
+      shield.rotation.z += 0.05;
+      if (shieldTime === 0) shieldMat.opacity = 0;
+    }
+
+    // ── Level up ──
+    if (frameCount % 400 === 0) {
+      level++;
+      speed += 0.006;
+      spawnRate = Math.max(18, spawnRate - 4);
+      SFX.levelUp();
+      updateUI();
+    }
+
+    // ── Spawn ──
     if (frameCount % spawnRate === 0) makeAsteroid();
-    if (frameCount % 90 === 0) makeStar();
+    // Multiple asteroids at higher levels
+    if (level >= 3 && frameCount % Math.max(25, spawnRate - 10) === 12) makeAsteroid();
+    if (frameCount % 80 === 0) makeStar();
+    if (frameCount % 300 === 0) makePowerup();
 
-    // Update obstacles
+    // ── Update obstacles ──
     for (let i = obstacles.length - 1; i >= 0; i--) {
       const o = obstacles[i];
       o.position.y -= o.userData.fallSpeed;
-      o.rotation.x += o.userData.rotSpeed;
-      o.rotation.y += o.userData.rotSpeed * 0.7;
-
-      // Hit check
+      o.rotation.x += o.userData.rotX;
+      o.rotation.y += o.userData.rotY;
       const dx = o.position.x - shipGroup.position.x;
       const dy = o.position.y - shipGroup.position.y;
-      if (Math.sqrt(dx*dx + dy*dy) < o.userData.r + 0.5) {
-        explode(o.position.clone(), 0xff8800);
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < o.userData.r + 0.45) {
+        if (shieldTime > 0) {
+          spawnParticles(o.position.clone(), 0x00ffff, 10);
+          scene.remove(o); obstacles.splice(i, 1);
+          SFX.collectStar(); continue;
+        }
+        spawnParticles(o.position.clone(), 0xff6600, 20);
         scene.remove(o); obstacles.splice(i, 1);
         loseLife(); continue;
       }
       if (o.position.y < -10) { scene.remove(o); obstacles.splice(i, 1); }
     }
 
-    // Update stars
+    // ── Update stars ──
     for (let i = stars.length - 1; i >= 0; i--) {
       const s = stars[i];
       s.position.y -= s.userData.fallSpeed;
-      s.rotation.y += 0.05;
+      s.rotation.y += 0.06; s.rotation.x += 0.04;
       const dx = s.position.x - shipGroup.position.x;
       const dy = s.position.y - shipGroup.position.y;
-      if (Math.sqrt(dx*dx + dy*dy) < 0.7) {
-        explode(s.position.clone(), 0xffdd00);
+      if (Math.sqrt(dx*dx + dy*dy) < 0.75) {
+        combo++;
+        const pts = 10 + (combo > 1 ? combo * 5 : 0);
+        score += pts;
+        showCombo(combo);
+        spawnParticles(s.position.clone(), 0xffdd00, 12);
         scene.remove(s); stars.splice(i, 1);
-        score += 10; updateUI(); continue;
+        SFX.collectStar();
+        updateUI(); continue;
       }
-      if (s.position.y < -10) { scene.remove(s); stars.splice(i, 1); }
+      if (s.position.y < -10) { scene.remove(s); stars.splice(i, 1); combo = 0; }
     }
 
-    // Score over time
-    if (frameCount % 30 === 0) { score++; updateUI(); }
+    // ── Update powerups ──
+    for (let i = powerups.length - 1; i >= 0; i--) {
+      const p = powerups[i];
+      p.position.y -= p.userData.fallSpeed;
+      p.rotation.y += 0.04;
+      const dx = p.position.x - shipGroup.position.x;
+      const dy = p.position.y - shipGroup.position.y;
+      if (Math.sqrt(dx*dx + dy*dy) < 0.9) {
+        shieldTime = 300;
+        shieldMat.opacity = 0.5;
+        spawnParticles(p.position.clone(), 0x00ffff, 16);
+        scene.remove(p); powerups.splice(i, 1);
+        SFX.levelUp(); updateUI(); continue;
+      }
+      if (p.position.y < -12) { scene.remove(p); powerups.splice(i, 1); }
+    }
 
-    // Camera subtle drift
-    camera.position.x += (playerX * 0.05 - camera.position.x) * 0.02;
+    // ── Update particles ──
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.position.x += p.userData.vx;
+      p.position.y += p.userData.vy;
+      p.userData.vy -= 0.003;
+      p.userData.life -= p.userData.decay;
+      p.material.opacity = p.userData.life;
+      p.scale.setScalar(p.userData.life);
+      if (p.userData.life <= 0) { scene.remove(p); particles.splice(i, 1); }
+    }
+
+    // ── Score over time ──
+    if (frameCount % 20 === 0) { score++; updateUI(); }
+
+    // ── Starfield parallax ──
+    const starPos = starGeo.attributes.position;
+    for (let i = 0; i < starPos.count; i++) {
+      let z = starPos.getZ(i) + starSpeeds[i] * 0.3;
+      if (z > 10) z = -180 - Math.random() * 20;
+      starPos.setZ(i, z);
+    }
+    starPos.needsUpdate = true;
+
+    // ── Screen shake ──
+    if (screenShake > 0) {
+      camera.position.set(
+        baseCamPos.x + (Math.random()-.5) * screenShake * 0.04,
+        baseCamPos.y + (Math.random()-.5) * screenShake * 0.04,
+        baseCamPos.z
+      );
+      screenShake *= 0.8;
+      if (screenShake < 0.5) { screenShake = 0; camera.position.copy(baseCamPos); }
+    } else {
+      camera.position.x += (playerX * 0.04 - camera.position.x) * 0.025;
+    }
   }
 
   renderer.render(scene, camera);
 }
 
 window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(innerWidth, innerHeight);
 });
 
 animate();
